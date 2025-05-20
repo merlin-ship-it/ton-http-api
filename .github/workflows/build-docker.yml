@@ -5,7 +5,7 @@ on:
 
 jobs:
   set_version:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -15,7 +15,7 @@ jobs:
         id: branch_name
         run: |
           GIT_BRANCH=`git symbolic-ref --short HEAD | sed "s/[^[:alnum:].]//g"`
-          echo "::set-output name=GIT_BRANCH::${GIT_BRANCH}"
+          echo "GIT_BRANCH=${GIT_BRANCH}" >> $GITHUB_OUTPUT
       - name: Get semantic version
         uses: paulhatch/semantic-version@v4.0.2
         id: versioning
@@ -28,18 +28,18 @@ jobs:
     outputs:
       version: ${{ github.ref == 'refs/heads/master' && steps.versioning.outputs.version_tag || steps.versioning.outputs.version}}
   buildx:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [ set_version ]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         id: buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
       - name: Inspect builder
         run: |
           echo "Name:      ${{ steps.buildx.outputs.name }}"
@@ -56,27 +56,18 @@ jobs:
           then
             DOCKER_PLATFORMS=linux/amd64,linux/arm64
           else
-            DOCKER_PLATFORMS=linux/amd64
+            DOCKER_PLATFORMS=linux/amd64,linux/arm64
           fi
           VERSION=${{ needs.set_version.outputs.version }}
 
           TAGS="-t ${DOCKER_IMAGE}:${VERSION} -t ${DOCKER_IMAGE}:latest"
 
-          echo ::set-output name=docker_image::${DOCKER_IMAGE}
-          echo ::set-output name=version::${VERSION}
-          echo ::set-output name=buildx_args::--platform ${DOCKER_PLATFORMS} \
-            ${TAGS} --file ton-http-api/.docker/Dockerfile ton-http-api \
-            --cache-from=${DOCKER_IMAGE}:latest
-
-          echo "Pulling latest image for cache"
-          IFS=', ' read -r -a PLATFORMS <<< "${DOCKER_PLATFORMS}"
-          for platform in "${PLATFORMS[@]}"
-          do
-            echo "Pulling image for platform ${platform}"
-            docker pull --platform ${platform} ${{ steps.prepare.outputs.docker_image }}:latest || true
-          done
+          echo "docker_image=${DOCKER_IMAGE}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "buildx_args=--platform ${DOCKER_PLATFORMS} --no-cache ${TAGS} --file ton-http-api/.docker/Dockerfile ton-http-api" >> $GITHUB_OUTPUT
       - name: Docker Buildx (build)
         run: |
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes -c yes
           docker buildx build --output "type=image,push=false" ${{ steps.prepare.outputs.buildx_args }}
       - name: Login to DockerHub
         if: success() && github.repository == 'toncenter/ton-http-api' && github.event_name == 'push' && github.ref == 'refs/heads/master'
